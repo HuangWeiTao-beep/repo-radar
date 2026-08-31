@@ -28,8 +28,32 @@ function Invoke-Git {
     param([string]$Root, [string[]]$Arguments)
 
     try {
-        $result = & git -C $Root @Arguments 2>$null
-        if ($LASTEXITCODE -eq 0) { return @($result) }
+        # Read Git through a byte-aware process stream. Windows PowerShell 5.1
+        # otherwise decodes native output with the active console code page,
+        # which corrupts UTF-8 branch names and commit messages.
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = "git"
+        $startInfo.WorkingDirectory = $Root
+        $startInfo.Arguments = $Arguments -join ' '
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        $startInfo.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
+
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        [void]$process.Start()
+        $stdout = $process.StandardOutput.ReadToEnd()
+        [void]$process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+        $process.Dispose()
+
+        if ($exitCode -eq 0 -and $stdout.Length -gt 0) {
+            return @($stdout.TrimEnd("`r", "`n") -split "`r?`n")
+        }
     } catch { }
     return @()
 }
@@ -215,10 +239,10 @@ $branch = "Not under Git"
 $statusLines = @()
 $commits = @()
 if ($gitAvailable) {
-    $gitRootResult = Invoke-Git -Root $root -Arguments @('rev-parse', '--show-toplevel')
+    $gitRootResult = @(Invoke-Git -Root $root -Arguments @('rev-parse', '--show-toplevel'))
     if ($gitRootResult.Count -gt 0) {
         $gitRoot = [string]$gitRootResult[0]
-        $branchResult = Invoke-Git -Root $root -Arguments @('branch', '--show-current')
+        $branchResult = @(Invoke-Git -Root $root -Arguments @('branch', '--show-current'))
         $branch = if ($branchResult.Count -gt 0 -and $branchResult[0]) { [string]$branchResult[0] } else { "Detached HEAD" }
         $statusLines = @(Invoke-Git -Root $root -Arguments @('status', '--short'))
         $logLines = @(Invoke-Git -Root $root -Arguments @('log', '-5', '--pretty=format:%h|%ad|%s', '--date=short'))
