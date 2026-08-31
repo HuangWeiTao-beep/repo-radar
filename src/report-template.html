@@ -216,7 +216,22 @@
     .todo-text { margin: 0; color: var(--text); font: 12px/1.55 "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
 
     .empty { padding: 24px; color: var(--muted); background: var(--surface-soft); border-radius: 12px; text-align: center; font-size: 13px; }
-    .footer { display: flex; justify-content: space-between; gap: 20px; margin: 32px 0 8px; color: var(--faint); font-size: 12px; }
+    .footer { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin: 32px 0 8px; color: var(--faint); font-size: 12px; }
+    .scan-footer { display: grid; justify-items: end; gap: 4px; max-width: min(640px, 100%); }
+    .scan-warning { color: var(--warn); font-weight: 750; }
+    .scan-disclosure { max-width: 100%; }
+    .scan-disclosure summary {
+      min-height: 32px; cursor: pointer; color: var(--faint); font-weight: 700; line-height: 1.5; text-align: right;
+    }
+    .scan-disclosure summary:hover, .scan-disclosure[open] summary { color: var(--muted); }
+    .scan-detail-content {
+      display: grid; gap: 9px; margin-top: 6px; padding: 12px; color: var(--muted); background: var(--surface);
+      border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); text-align: left;
+    }
+    .scan-detail-content p { margin: 0; line-height: 1.55; }
+    .scan-detail-content strong { color: var(--text); }
+    .directory-chips { display: inline-flex; flex-wrap: wrap; gap: 5px; margin-left: 5px; vertical-align: middle; }
+    .directory-chip { padding: 2px 6px; color: var(--muted); background: var(--surface-soft); border-radius: 5px; font: 11px/1.5 "Cascadia Code", Consolas, monospace; }
     .toast {
       position: fixed; right: 20px; bottom: 20px; z-index: 100; max-width: min(360px, calc(100vw - 40px));
       padding: 12px 16px; color: var(--accent-on); background: var(--accent); border-radius: 12px; box-shadow: var(--shadow);
@@ -246,6 +261,8 @@
       .search-wrap { padding: 0 16px 12px; }
       .search-wrap svg { left: 30px; }
       .footer { flex-direction: column; }
+      .scan-footer { justify-items: start; width: 100%; }
+      .scan-disclosure summary { text-align: left; }
     }
     @media (max-width: 375px) {
       .shell { padding: 12px; }
@@ -358,7 +375,20 @@
       </div>
     </main>
 
-    <footer class="footer"><span data-i18n="footerPrivacy">Generated locally by Repo Radar. No source code left your machine.</span><span id="scan-limit"></span></footer>
+    <footer class="footer">
+      <span data-i18n="footerPrivacy">Generated locally by Repo Radar. No source code left your machine.</span>
+      <div class="scan-footer">
+        <span class="scan-warning" id="scan-limit" hidden></span>
+        <details class="scan-disclosure">
+          <summary id="scan-summary"></summary>
+          <div class="scan-detail-content">
+            <p id="scan-skipped-row"><strong id="scan-skipped-label"></strong><span class="directory-chips" id="scan-skipped-items"></span></p>
+            <p id="scan-reparse-row" hidden></p>
+            <p><strong id="scan-rules-label"></strong><span class="directory-chips" id="scan-rules"></span></p>
+          </div>
+        </details>
+      </div>
+    </footer>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script id="radar-data" type="application/json">__REPO_RADAR_DATA__</script>
@@ -390,7 +420,11 @@
           noCommits: 'No commit history found.', gitInactive: 'Git is not active for this folder.',
           directories: (count) => `${count} directories scanned`, showItems: (count) => `Show ${count} item(s)`,
           showingMarkers: (shown, total) => `Showing ${shown} of ${total} markers.`,
-          scanLimited: (count) => `Scan capped at ${count} files.`, noisySkipped: (count) => `${count} noisy folder types skipped.`,
+          scanLimited: (count) => `Scan capped at ${count} files.`,
+          skippedSummary: (directories, types) => `${directories} ${directories === 1 ? 'folder' : 'folders'} skipped (${types} ${types === 1 ? 'type' : 'types'}).`,
+          noSkippedSummary: 'No excluded folders encountered.', skippedActual: 'Skipped in this scan:',
+          excludedRules: (count) => `Default exclusion rules (${count} types):`,
+          reparseSkipped: (count) => `${count} ${count === 1 ? 'directory link was' : 'directory links were'} skipped to avoid scan loops.`,
           themeDark: 'Switch to dark theme', themeLight: 'Switch to light theme', languageSwitch: '切换到中文', languageChanged: 'Switched to English'
         },
         zh: {
@@ -415,7 +449,11 @@
           noCommits: '未找到提交历史。', gitInactive: '此文件夹尚未使用 Git。',
           directories: (count) => `已扫描 ${count} 个目录`, showItems: (count) => `显示 ${count} 项`,
           showingMarkers: (shown, total) => `显示 ${total} 个标记中的 ${shown} 个。`,
-          scanLimited: (count) => `扫描上限为 ${count} 个文件。`, noisySkipped: (count) => `已跳过 ${count} 类高噪声目录。`,
+          scanLimited: (count) => `扫描上限为 ${count} 个文件。`,
+          skippedSummary: (directories, types) => `本次跳过 ${directories} 个目录（${types} 类）。`,
+          noSkippedSummary: '本次未遇到需要跳过的目录。', skippedActual: '本次实际跳过：',
+          excludedRules: (count) => `默认忽略规则（${count} 类）：`,
+          reparseSkipped: (count) => `另跳过 ${count} 个目录链接，以避免循环扫描。`,
           themeDark: '切换到深色主题', themeLight: '切换到浅色主题', languageSwitch: 'Switch to English', languageChanged: '已切换为中文',
           reasonPackageScript: 'package.json 脚本', reasonPython: 'Python 项目', reasonRust: 'Rust 项目', reasonGo: 'Go 项目',
           reasonDotNet: '.NET 解决方案', reasonMaven: 'Maven 项目', reasonGradle: 'Gradle 包装器',
@@ -515,7 +553,24 @@
         $('language-toggle').title = $t('languageSwitch');
 
         $('branch').textContent = locale === 'zh' && data.project.branchKey ? $t(data.project.branchKey) : data.project.branch;
-        $('scan-limit').textContent = data.scan.limited ? $t('scanLimited', formatNumber(data.scan.maxFiles)) : $t('noisySkipped', data.scan.excluded.length);
+
+        const skippedDirectories = data.scan.skippedDirectories || [];
+        const skippedDirectoryCount = data.scan.skippedDirectoryCount || 0;
+        const excludedRules = data.scan.excludedRules || [];
+        $('scan-limit').hidden = !data.scan.limited;
+        $('scan-limit').textContent = data.scan.limited ? $t('scanLimited', formatNumber(data.scan.maxFiles)) : '';
+        $('scan-summary').textContent = skippedDirectoryCount
+          ? $t('skippedSummary', skippedDirectoryCount, skippedDirectories.length)
+          : $t('noSkippedSummary');
+        $('scan-skipped-row').hidden = !skippedDirectories.length;
+        $('scan-skipped-label').textContent = $t('skippedActual');
+        $('scan-skipped-items').textContent = '';
+        skippedDirectories.forEach((item) => $('scan-skipped-items').append(el('span', 'directory-chip', `${item.name} ×${formatNumber(item.count)}`)));
+        $('scan-reparse-row').hidden = !data.scan.reparsePointCount;
+        $('scan-reparse-row').textContent = data.scan.reparsePointCount ? $t('reparseSkipped', data.scan.reparsePointCount) : '';
+        $('scan-rules-label').textContent = $t('excludedRules', excludedRules.length);
+        $('scan-rules').textContent = '';
+        excludedRules.forEach((name) => $('scan-rules').append(el('span', 'directory-chip', name)));
 
         const metrics = [
           [$t('files'), formatNumber(data.metrics.files), $t('directories', formatNumber(data.metrics.directories))],

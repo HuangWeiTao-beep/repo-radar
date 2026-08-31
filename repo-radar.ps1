@@ -14,6 +14,12 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+$excludedDirectoryNames = @(
+    '.git', 'node_modules', 'dist', 'build', '.next', '.nuxt', 'out', 'vendor',
+    'coverage', '.venv', 'venv', 'target', 'bin', 'obj', '__pycache__', '.idea',
+    '.gradle', '.cache'
+)
+
 function Get-RelativePathSafe {
     param([string]$BasePath, [string]$TargetPath)
 
@@ -59,21 +65,24 @@ function Invoke-Git {
 }
 
 function Get-ScannableFiles {
-    param([System.IO.DirectoryInfo]$Root, [int]$Limit)
+    param(
+        [System.IO.DirectoryInfo]$Root,
+        [int]$Limit,
+        [string[]]$ExcludedDirectoryNames
+    )
 
-    $excluded = @{
-        ".git" = $true; "node_modules" = $true; "dist" = $true; "build" = $true;
-        ".next" = $true; ".nuxt" = $true; "out" = $true; "vendor" = $true;
-        "coverage" = $true; ".venv" = $true; "venv" = $true; "target" = $true;
-        "bin" = $true; "obj" = $true; "__pycache__" = $true; ".idea" = $true;
-        ".gradle" = $true; ".cache" = $true
+    $excluded = @{}
+    foreach ($name in $ExcludedDirectoryNames) {
+        $excluded[$name] = $true
     }
 
     $files = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
     $stack = [System.Collections.Generic.Stack[System.IO.DirectoryInfo]]::new()
+    $skippedDirectoryCounts = @{}
     $stack.Push($Root)
     $directoryCount = 0
     $limited = $false
+    $reparsePointCount = 0
 
     while ($stack.Count -gt 0) {
         $directory = $stack.Pop()
@@ -90,17 +99,39 @@ function Get-ScannableFiles {
 
         try {
             foreach ($child in $directory.GetDirectories()) {
-                if (-not $excluded.ContainsKey($child.Name) -and -not ($child.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-                    $stack.Push($child)
+                if ($excluded.ContainsKey($child.Name)) {
+                    if ($skippedDirectoryCounts.ContainsKey($child.Name)) {
+                        $skippedDirectoryCounts[$child.Name]++
+                    } else {
+                        $skippedDirectoryCounts[$child.Name] = 1
+                    }
+                    continue
                 }
+
+                if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                    $reparsePointCount++
+                    continue
+                }
+
+                $stack.Push($child)
             }
         } catch { }
     }
+
+    $skippedDirectories = @(
+        $skippedDirectoryCounts.GetEnumerator() |
+            Sort-Object Name |
+            ForEach-Object { [pscustomobject]@{ name = $_.Name; count = $_.Value } }
+    )
+    $skippedDirectoryCount = [int](($skippedDirectories | Measure-Object count -Sum).Sum)
 
     return [pscustomobject]@{
         Files = $files
         DirectoryCount = $directoryCount
         Limited = $limited
+        SkippedDirectories = $skippedDirectories
+        SkippedDirectoryCount = $skippedDirectoryCount
+        ReparsePointCount = $reparsePointCount
     }
 }
 
@@ -130,7 +161,7 @@ if (-not (Test-Path -LiteralPath $templatePath)) {
     throw "Report template is missing: $templatePath"
 }
 
-$scan = Get-ScannableFiles -Root $rootItem -Limit $MaxFiles
+$scan = Get-ScannableFiles -Root $rootItem -Limit $MaxFiles -ExcludedDirectoryNames $excludedDirectoryNames
 $files = @($scan.Files | Where-Object { $_.FullName -ne $outputFullPath })
 $relativeFiles = @{}
 foreach ($file in $files) {
@@ -322,7 +353,7 @@ if ($readme) {
 
 $totalBytes = [long](($files | Measure-Object Length -Sum).Sum)
 $data = [ordered]@{
-    generatedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss zzz")
+    generatedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss 'UTC'zzz")
     project = [ordered]@{
         name = $projectTitle
         path = $root
@@ -352,7 +383,10 @@ $data = [ordered]@{
     scan = [ordered]@{
         limited = $scan.Limited
         maxFiles = $MaxFiles
-        excluded = @('.git', 'node_modules', 'dist', 'build', '.next', 'vendor', 'coverage', '.venv', 'target', 'bin', 'obj')
+        excludedRules = @($excludedDirectoryNames)
+        skippedDirectories = @($scan.SkippedDirectories)
+        skippedDirectoryCount = $scan.SkippedDirectoryCount
+        reparsePointCount = $scan.ReparsePointCount
     }
 }
 
