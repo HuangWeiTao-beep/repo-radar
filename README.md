@@ -107,6 +107,8 @@ bin           obj            __pycache__   .idea
 
 Directory links and reparse points are skipped to avoid scan loops. The report footer shows the directories actually skipped during that scan, separately from the full default rule list.
 
+If a directory cannot be read, the report marks the scan as incomplete and lists up to the first 20 affected paths. A partial scan should never dress itself up as a complete one.
+
 When `-MaxFiles` is reached, the scan stops and the report displays a coverage warning. Counts and recommendations then describe only the scanned portion of the repository.
 
 TODO-style content scanning is limited to recognized text files no larger than 1 MB. The report records at most the first 40 matching lines, although the marker total can be higher.
@@ -118,7 +120,7 @@ TODO-style content scanning is limited to recognized text files no larger than 1
 - README, test, license, and common CI workflow files
 - Git branch, current status, and recent commit subjects
 - Files larger than 5 MB
-- Sensitive-looking filenames such as `.env`, private keys, and certificates
+- Sensitive-looking filenames such as `.env`, `.env.*`, private keys, and certificates; environment templates ending in `.example`, `.sample`, or `.template` are ignored
 - TODO, FIXME, HACK, and XXX comments
 
 Detection is heuristic. Repo Radar does not execute project commands, install dependencies, or infer commands that are not supported by repository evidence.
@@ -173,7 +175,7 @@ Run the smoke test from the repository root:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\smoke.ps1
 ```
 
-The test verifies report generation, Unicode Git output, UTC offset formatting, TODO detection, exclusion rules, output exclusion at the scan limit, and the self-scan false-positive regression.
+The test verifies report generation, Unicode Git output, Git failure handling, UTC offset formatting, TODO detection, sensitive filename classification, exclusion rules, output exclusion at the scan limit, and the self-scan false-positive regression.
 
 ## License
 

@@ -20,6 +20,13 @@ function Read-ReportData {
 }
 
 try {
+    $templatePath = Join-Path $projectRoot "src\report-template.html"
+    $templateHtml = [System.IO.File]::ReadAllText($templatePath, [System.Text.Encoding]::UTF8)
+    if ([regex]::Matches($templateHtml, '__REPO_RADAR_DATA__').Count -ne 1) { throw "Report template must contain exactly one data placeholder" }
+    foreach ($expectedTemplateMessage in @('Report data unavailable', 'Generate the report first')) {
+        if (-not $templateHtml.Contains($expectedTemplateMessage)) { throw "Report template is missing its direct-open guidance: $expectedTemplateMessage" }
+    }
+
     New-Item -ItemType Directory -Path (Join-Path $temporaryRoot "src") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $temporaryRoot "node_modules\fixture-package") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $temporaryRoot "dist") -Force | Out-Null
@@ -29,6 +36,10 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "src\main.ts"), "export const answer = 42; // ${todoKeyword}: explain the universe`n")
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "src\main.test.ts"), "// smoke test`n")
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "src\pnpm-lock.yaml"), "# A nested lockfile must not change the root package manager.`n")
+    [System.IO.File]::WriteAllText((Join-Path $temporaryRoot ".env.staging"), "SECRET=redacted")
+    [System.IO.File]::WriteAllText((Join-Path $temporaryRoot ".env.example"), "SECRET=placeholder")
+    [System.IO.File]::WriteAllText((Join-Path $temporaryRoot ".env.sample"), "SECRET=placeholder")
+    [System.IO.File]::WriteAllText((Join-Path $temporaryRoot ".env.template"), "SECRET=placeholder")
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "node_modules\fixture-package\index.js"), "// ${todoKeyword}: excluded dependency marker`n")
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "dist\bundle.js"), "// ${todoKeyword}: excluded build marker`n")
 
@@ -62,12 +73,20 @@ try {
 
     $reportedTodos = @($reportData.todos)
     if ($reportedTodos.Count -ne 1 -or $reportedTodos[0].file -ne 'src\main.ts') { throw "Excluded fixture markers leaked into the report" }
-    if ($reportData.metrics.files -ne 5) { throw "Excluded directory files were included in the file count" }
+    if ($reportData.metrics.files -ne 9) { throw "Excluded directory files were included in the file count" }
     if ($reportData.scan.skippedDirectoryCount -ne 3) { throw "Actual skipped directory count was not reported" }
     if (@($reportData.scan.excludedRules).Count -ne 18) { throw "The report does not use the complete exclusion rule list" }
     $skippedNames = @($reportData.scan.skippedDirectories | ForEach-Object { $_.name })
     foreach ($expectedName in @('.git', 'dist', 'node_modules')) {
         if ($skippedNames -notcontains $expectedName) { throw "Skipped directory type was not reported: $expectedName" }
+    }
+    if ($reportData.scan.scanErrorDirectoryCount -ne 0) { throw "A normal scan reported unreadable directories" }
+
+    $sensitiveRisk = @($reportData.risks | Where-Object { $_.titleKey -eq 'riskSensitive' })[0]
+    $sensitiveItems = @($sensitiveRisk.items)
+    if ($sensitiveItems -notcontains '.env.staging') { throw "A real environment file was not reported" }
+    foreach ($templateName in @('.env.example', '.env.sample', '.env.template')) {
+        if ($sensitiveItems -contains $templateName) { throw "Environment template was reported as sensitive: $templateName" }
     }
 
     $limitScanRoot = Join-Path $temporaryRoot "limit-scan"
@@ -83,6 +102,26 @@ try {
     if ($limitScanData.metrics.files -ne 100 -or $limitScanData.scan.limited) {
         throw "The existing output report consumed a scan slot"
     }
+
+    $gitFailureRoot = Join-Path $temporaryRoot "git-failure"
+    $gitFailureReport = Join-Path $gitFailureRoot "report.html"
+    New-Item -ItemType Directory -Path $gitFailureRoot -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $gitFailureRoot "README.md"), "# Git Failure Fixture`n")
+    & git -C $gitFailureRoot init -b main | Out-Null
+    & git -C $gitFailureRoot config user.name "Repo Radar Test"
+    & git -C $gitFailureRoot config user.email "repo-radar@example.invalid"
+    & git -C $gitFailureRoot add README.md
+    & git -C $gitFailureRoot commit -m "initial" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not create the Git failure fixture" }
+    [System.IO.File]::WriteAllBytes((Join-Path $gitFailureRoot ".git\index"), [byte[]](1, 2, 3))
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $scanner -Path $gitFailureRoot -Output $gitFailureReport | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Scanner could not perform the Git failure regression check" }
+    $gitFailureData = (Read-ReportData -ReportPath $gitFailureReport).Data
+    $gitFailureHealth = @($gitFailureData.health | Where-Object { $_.labelKey -eq 'healthGit' })[0]
+    if (-not $gitFailureData.project.git -or $gitFailureData.project.gitStatusAvailable) { throw "Git status failure was not preserved" }
+    if ($null -ne $gitFailureData.metrics.changed) { throw "Failed Git status was reported as a change count" }
+    if ($gitFailureHealth.state -ne 'warn' -or $gitFailureHealth.detailKey -ne 'gitStatusUnavailable') { throw "Failed Git status was reported as clean" }
+    if (-not @($gitFailureData.actions | Where-Object { $_.titleKey -eq 'actionGitStatus' }).Count) { throw "Git status failure did not produce a next action" }
 
     $selfScanRoot = Join-Path $temporaryRoot "self-scan"
     $selfScanReport = Join-Path $temporaryRoot "self-scan-report.html"

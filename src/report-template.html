@@ -378,7 +378,7 @@
     <footer class="footer">
       <span data-i18n="footerPrivacy">Generated locally by Repo Radar. No source code left your machine.</span>
       <div class="scan-footer">
-        <span class="scan-warning" id="scan-limit" hidden></span>
+        <span class="scan-warning" id="scan-limit" role="status" aria-live="polite" hidden></span>
         <details class="scan-disclosure">
           <summary id="scan-summary"></summary>
           <div class="scan-detail-content">
@@ -395,8 +395,29 @@
   <script>
     (() => {
       'use strict';
-      const data = JSON.parse(document.getElementById('radar-data').textContent);
       const $ = (id) => document.getElementById(id);
+      let data;
+      try {
+        data = JSON.parse($('radar-data').textContent);
+      } catch {
+        const templateInChinese = (navigator.language || '').toLowerCase().startsWith('zh');
+        const templateText = templateInChinese
+          ? { title: '报告尚未生成', eyebrow: '报告数据不可用', heading: '请先生成报告', skip: '跳到生成提示', footer: '这是模板文件，尚未加载项目数据。' }
+          : { title: 'Report not generated', eyebrow: 'Report data unavailable', heading: 'Generate the report first', skip: 'Skip to setup guidance', footer: 'Template file; no project data loaded.' };
+        document.title = `Repo Radar · ${templateText.title}`;
+        document.documentElement.lang = templateInChinese ? 'zh-CN' : 'en';
+        document.querySelector('.skip-link').textContent = templateText.skip;
+        document.querySelector('[data-i18n="eyebrow"]').textContent = templateText.eyebrow;
+        $('project-title').textContent = templateText.heading;
+        $('project-path').textContent = ".\\repo-radar.ps1 C:\\path\\to\\project -Open";
+        document.querySelector('.top-actions').hidden = true;
+        $('scan-meta').hidden = true;
+        $('metrics').hidden = true;
+        document.querySelector('.dashboard').hidden = true;
+        document.querySelector('.scan-footer').hidden = true;
+        document.querySelector('[data-i18n="footerPrivacy"]').textContent = templateText.footer;
+        return;
+      }
       const dictionaries = {
         en: {
           skip: 'Skip to dashboard', copyScan: 'Copy scan command', copyScanAria: 'Copy command to scan this project again',
@@ -411,7 +432,7 @@
           filterLabel: 'Filter code markers', filterPlaceholder: 'Filter by file or text…',
           footerPrivacy: 'Generated locally by Repo Radar. No source code left your machine.',
           files: 'Files', sourceSize: 'Source size', changed: 'Changed', markers: 'Markers',
-          sourceNote: 'Excluded dependencies and build output', currentWorktree: 'Current Git worktree', gitMissing: 'Git not detected', markersNote: 'TODO-style notes found',
+          sourceNote: 'Excluded dependencies and build output', currentWorktree: 'Current Git worktree', gitMissing: 'Git not detected', gitStatusUnavailable: 'Git status unavailable', markersNote: 'TODO-style notes found',
           copied: 'Copied to clipboard', copy: 'Copy', copyCommand: (command) => `Copy command: ${command}`,
           noCommands: 'No trustworthy project commands were detected. The tool refuses to hallucinate one.',
           noLanguages: 'No recognized source files yet. A blank canvas, or a very mysterious project.', noStack: 'No stack marker detected',
@@ -421,6 +442,7 @@
           directories: (count) => `${count} directories scanned`, showItems: (count) => `Show ${count} item(s)`,
           showingMarkers: (shown, total) => `Showing ${shown} of ${total} markers.`,
           scanLimited: (count) => `Scan capped at ${count} files.`,
+          scanIncomplete: (count) => `${count} unreadable ${count === 1 ? 'directory' : 'directories'}; results are incomplete.`,
           skippedSummary: (directories, types) => `${directories} ${directories === 1 ? 'folder' : 'folders'} skipped (${types} ${types === 1 ? 'type' : 'types'}).`,
           noSkippedSummary: 'No excluded folders encountered.', skippedActual: 'Skipped in this scan:',
           excludedRules: (count) => `Default exclusion rules (${count} types):`,
@@ -440,7 +462,7 @@
           filterLabel: '筛选代码标记', filterPlaceholder: '按文件或内容筛选…',
           footerPrivacy: '由 Repo Radar 在本机生成，源代码从未离开你的设备。',
           files: '文件', sourceSize: '源码大小', changed: '变更', markers: '标记',
-          sourceNote: '已排除依赖和构建产物', currentWorktree: '当前 Git 工作区', gitMissing: '未检测到 Git', markersNote: '发现的 TODO 类备注',
+          sourceNote: '已排除依赖和构建产物', currentWorktree: '当前 Git 工作区', gitMissing: '未检测到 Git', gitStatusUnavailable: 'Git 状态不可用', markersNote: '发现的 TODO 类备注',
           copied: '已复制到剪贴板', copy: '复制', copyCommand: (command) => `复制命令：${command}`,
           noCommands: '没有检测到可信的项目命令。工具拒绝现场瞎编一个。',
           noLanguages: '暂未发现可识别的源文件。要么是一张白纸，要么项目相当神秘。', noStack: '未检测到技术栈标记',
@@ -450,6 +472,7 @@
           directories: (count) => `已扫描 ${count} 个目录`, showItems: (count) => `显示 ${count} 项`,
           showingMarkers: (shown, total) => `显示 ${total} 个标记中的 ${shown} 个。`,
           scanLimited: (count) => `扫描上限为 ${count} 个文件。`,
+          scanIncomplete: (count) => `${count} 个目录无法读取，扫描结果不完整。`,
           skippedSummary: (directories, types) => `本次跳过 ${directories} 个目录（${types} 类）。`,
           noSkippedSummary: '本次未遇到需要跳过的目录。', skippedActual: '本次实际跳过：',
           excludedRules: (count) => `默认忽略规则（${count} 类）：`,
@@ -459,10 +482,12 @@
           reasonDotNet: '.NET 解决方案', reasonMaven: 'Maven 项目', reasonGradle: 'Gradle 包装器',
           healthReadme: 'README', healthTests: '测试', healthLicense: '许可证', healthAutomation: '自动化', healthGit: 'Git 工作区',
           noReadme: '未找到 README', testsDetected: '检测到测试文件', noTests: '未检测到测试文件', noLicense: '未检测到许可证',
-          ciDetected: '检测到 CI 工作流', noCi: '未检测到 CI 工作流', notUnderGit: '未使用 Git', detachedHead: '分离 HEAD', clean: '干净',
+          ciDetected: '检测到 CI 工作流', noCi: '未检测到 CI 工作流', notUnderGit: '未使用 Git', detachedHead: '分离 HEAD', gitBranchUnavailable: 'Git 分支不可用', clean: '干净',
           changedItems: (count) => `${count} 个变更项`,
           actionGit: '把项目纳入版本控制', actionGitDetail: '在进行重要改动前先初始化 Git。',
+          actionGitStatus: '修复 Git 状态', actionGitStatusDetail: 'Git 无法读取工作区状态。在信任变更数量前，请先检查仓库。',
           actionReview: '检查当前工作区', actionReviewDetail: (count) => `当前有 ${count} 个变更项。继续叠加工作前，先确认这些改动的来龙去脉。`,
+          actionScanErrors: '检查无法读取的目录', actionScanErrorsDetail: (count) => `${count} 个目录未被扫描。请修复访问权限或缩小扫描范围。`,
           actionSensitive: '确认敏感文件已被忽略', actionSensitiveDetail: '检查环境配置与密钥文件，但不要暴露其内容。',
           actionReadme: '写一份最短但有用的 README', actionReadmeDetail: '说明项目是什么、如何运行，以及怎样验证改动。',
           actionTest: '添加一个高价值冒烟测试', actionTestDetail: '先覆盖主流程；庞大的测试框架可以等等。',
@@ -471,6 +496,7 @@
           riskSensitive: '疑似敏感文件', riskSensitiveDetail: (count) => `发现 ${count} 个凭据或环境配置文件。请确认它们已被忽略，且没有提交任何密钥。`,
           riskLarge: '大文件', riskLargeDetail: (count) => `${count} 个文件超过 5 MB，可能拖慢克隆或代码审查。`,
           riskLimit: '已达到扫描上限', riskLimitDetail: (count) => `扫描在 ${count} 个文件处停止。可提高 -MaxFiles 参数以生成完整报告。`,
+          riskScanErrors: '扫描不完整', riskScanErrorsDetail: (count) => `${count} 个目录无法读取，因此报告只代表已成功扫描的部分。`,
           riskNoTests: '未检测到测试', riskNoTestsDetail: '当前改动缺少明显的自动化安全网。',
           riskTodos: 'TODO 积压', riskTodosDetail: (count) => `检测到 ${count} 个 TODO 类标记。有些可能无伤大雅，但堆多了就值得处理。`
         }
@@ -556,9 +582,13 @@
 
         const skippedDirectories = data.scan.skippedDirectories || [];
         const skippedDirectoryCount = data.scan.skippedDirectoryCount || 0;
+        const scanErrorDirectoryCount = data.scan.scanErrorDirectoryCount || 0;
         const excludedRules = data.scan.excludedRules || [];
-        $('scan-limit').hidden = !data.scan.limited;
-        $('scan-limit').textContent = data.scan.limited ? $t('scanLimited', formatNumber(data.scan.maxFiles)) : '';
+        const scanWarnings = [];
+        if (data.scan.limited) scanWarnings.push($t('scanLimited', formatNumber(data.scan.maxFiles)));
+        if (scanErrorDirectoryCount) scanWarnings.push($t('scanIncomplete', formatNumber(scanErrorDirectoryCount)));
+        $('scan-limit').hidden = !scanWarnings.length;
+        $('scan-limit').textContent = scanWarnings.join(' ');
         $('scan-summary').textContent = skippedDirectoryCount
           ? $t('skippedSummary', skippedDirectoryCount, skippedDirectories.length)
           : $t('noSkippedSummary');
@@ -572,10 +602,11 @@
         $('scan-rules').textContent = '';
         excludedRules.forEach((name) => $('scan-rules').append(el('span', 'directory-chip', name)));
 
+        const gitStatusAvailable = data.project.gitStatusAvailable !== false;
         const metrics = [
           [$t('files'), formatNumber(data.metrics.files), $t('directories', formatNumber(data.metrics.directories))],
           [$t('sourceSize'), formatBytes(data.metrics.sizeBytes), $t('sourceNote')],
-          [$t('changed'), formatNumber(data.metrics.changed), data.project.git ? $t('currentWorktree') : $t('gitMissing')],
+          [$t('changed'), data.metrics.changed === null ? '—' : formatNumber(data.metrics.changed), data.project.git ? $t(gitStatusAvailable ? 'currentWorktree' : 'gitStatusUnavailable') : $t('gitMissing')],
           [$t('markers'), formatNumber(data.metrics.todos), $t('markersNote')]
         ];
         $('metrics').textContent = '';

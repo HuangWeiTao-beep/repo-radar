@@ -57,11 +57,11 @@ function Invoke-Git {
         $exitCode = $process.ExitCode
         $process.Dispose()
 
-        if ($exitCode -eq 0 -and $stdout.Length -gt 0) {
-            return @($stdout.TrimEnd("`r", "`n") -split "`r?`n")
-        }
-    } catch { }
-    return @()
+        $lines = if ($stdout.Length -gt 0) { @($stdout.TrimEnd("`r", "`n") -split "`r?`n") } else { @() }
+        return [pscustomobject]@{ Succeeded = ($exitCode -eq 0); Lines = $lines }
+    } catch {
+        return [pscustomobject]@{ Succeeded = $false; Lines = @() }
+    }
 }
 
 function Get-ScannableFiles {
@@ -80,6 +80,7 @@ function Get-ScannableFiles {
     $files = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
     $stack = [System.Collections.Generic.Stack[System.IO.DirectoryInfo]]::new()
     $skippedDirectoryCounts = @{}
+    $scanErrorDirectories = @{}
     $stack.Push($Root)
     $directoryCount = 0
     $limited = $false
@@ -95,7 +96,9 @@ function Get-ScannableFiles {
                 if ($files.Count -ge $Limit) { $limited = $true; break }
                 $files.Add($file)
             }
-        } catch { }
+        } catch {
+            $scanErrorDirectories[$directory.FullName] = $true
+        }
 
         if ($limited) { break }
 
@@ -117,7 +120,9 @@ function Get-ScannableFiles {
 
                 $stack.Push($child)
             }
-        } catch { }
+        } catch {
+            $scanErrorDirectories[$directory.FullName] = $true
+        }
     }
 
     $skippedDirectories = @(
@@ -126,6 +131,11 @@ function Get-ScannableFiles {
             ForEach-Object { [pscustomobject]@{ name = $_.Name; count = $_.Value } }
     )
     $skippedDirectoryCount = [int](($skippedDirectories | Measure-Object count -Sum).Sum)
+    $scanErrorDirectoryCount = $scanErrorDirectories.Count
+    $scanErrorDirectoryPaths = @($scanErrorDirectories.Keys | Sort-Object | Select-Object -First 20 | ForEach-Object {
+        $relativePath = Get-RelativePathSafe -BasePath $Root.FullName -TargetPath $_
+        if ($relativePath) { $relativePath } else { "." }
+    })
 
     return [pscustomobject]@{
         Files = $files
@@ -134,6 +144,9 @@ function Get-ScannableFiles {
         SkippedDirectories = $skippedDirectories
         SkippedDirectoryCount = $skippedDirectoryCount
         ReparsePointCount = $reparsePointCount
+        ScanErrorDirectoryCount = $scanErrorDirectoryCount
+        ScanErrorDirectoryPaths = $scanErrorDirectoryPaths
+        ScanErrorsTruncated = ($scanErrorDirectoryCount -gt $scanErrorDirectoryPaths.Count)
     }
 }
 
@@ -263,9 +276,11 @@ $hasCi = [bool]($files | Where-Object {
     $relativeFiles[$_.FullName] -match '^\.github\\workflows\\|^\.gitlab-ci\.yml$|^azure-pipelines\.yml$'
 } | Select-Object -First 1)
 
-$sensitiveNames = @('.env', '.env.local', '.env.production', 'id_rsa', 'id_dsa')
+$sensitiveNames = @('id_rsa', 'id_dsa')
 $sensitiveFiles = @($files | Where-Object {
-    $sensitiveNames -contains $_.Name.ToLowerInvariant() -or $_.Extension.ToLowerInvariant() -in @('.pem', '.p12', '.pfx', '.key')
+    $name = $_.Name.ToLowerInvariant()
+    $isEnvironmentFile = $name -eq '.env' -or ($name.StartsWith('.env.') -and $name -notmatch '\.(example|sample|template)$')
+    $isEnvironmentFile -or $sensitiveNames -contains $name -or $_.Extension.ToLowerInvariant() -in @('.pem', '.p12', '.pfx', '.key')
 } | ForEach-Object { $relativeFiles[$_.FullName] })
 $largeFiles = @($files | Where-Object { $_.Length -gt 5MB } | Sort-Object Length -Descending | Select-Object -First 8 | ForEach-Object {
     [pscustomobject]@{ file = $relativeFiles[$_.FullName]; megabytes = [math]::Round($_.Length / 1MB, 1) }
@@ -276,14 +291,20 @@ $gitRoot = ""
 $branch = "Not under Git"
 $statusLines = @()
 $commits = @()
+$gitStatusAvailable = $false
 if ($gitAvailable) {
-    $gitRootResult = @(Invoke-Git -Root $root -Arguments @('rev-parse', '--show-toplevel'))
-    if ($gitRootResult.Count -gt 0) {
-        $gitRoot = [string]$gitRootResult[0]
-        $branchResult = @(Invoke-Git -Root $root -Arguments @('branch', '--show-current'))
-        $branch = if ($branchResult.Count -gt 0 -and $branchResult[0]) { [string]$branchResult[0] } else { "Detached HEAD" }
-        $statusLines = @(Invoke-Git -Root $root -Arguments @('status', '--short'))
-        $logLines = @(Invoke-Git -Root $root -Arguments @('log', '-5', '--pretty=format:%h|%ad|%s', '--date=short'))
+    $gitRootResult = Invoke-Git -Root $root -Arguments @('rev-parse', '--show-toplevel')
+    $gitRootLines = @($gitRootResult.Lines)
+    if ($gitRootResult.Succeeded -and $gitRootLines.Count -gt 0) {
+        $gitRoot = [string]$gitRootLines[0]
+        $branchResult = Invoke-Git -Root $root -Arguments @('branch', '--show-current')
+        $branchLines = @($branchResult.Lines)
+        $branch = if (-not $branchResult.Succeeded) { "Git branch unavailable" } elseif ($branchLines.Count -gt 0 -and $branchLines[0]) { [string]$branchLines[0] } else { "Detached HEAD" }
+        $statusResult = Invoke-Git -Root $root -Arguments @('status', '--short')
+        $gitStatusAvailable = $statusResult.Succeeded
+        $statusLines = if ($gitStatusAvailable) { @($statusResult.Lines) } else { @() }
+        $logResult = Invoke-Git -Root $root -Arguments @('log', '-5', '--pretty=format:%h|%ad|%s', '--date=short')
+        $logLines = if ($logResult.Succeeded) { @($logResult.Lines) } else { @() }
         $commits = @($logLines | ForEach-Object {
             $parts = $_ -split '\|', 3
             if ($parts.Count -eq 3) { [pscustomobject]@{ hash = $parts[0]; date = $parts[1]; subject = $parts[2] } }
@@ -320,7 +341,7 @@ $health.Add([pscustomobject]@{ label = "README"; labelKey = "healthReadme"; stat
 $health.Add([pscustomobject]@{ label = "Tests"; labelKey = "healthTests"; state = if ($hasTests) { "good" } else { "warn" }; detail = if ($hasTests) { "Test files detected" } else { "No test files detected" }; detailKey = if ($hasTests) { "testsDetected" } else { "noTests" }; count = 0 })
 $health.Add([pscustomobject]@{ label = "License"; labelKey = "healthLicense"; state = if ($license) { "good" } else { "info" }; detail = if ($license) { $relativeFiles[$license.FullName] } else { "No license detected" }; detailKey = if ($license) { $null } else { "noLicense" }; count = 0 })
 $health.Add([pscustomobject]@{ label = "Automation"; labelKey = "healthAutomation"; state = if ($hasCi) { "good" } else { "info" }; detail = if ($hasCi) { "CI workflow detected" } else { "No CI workflow detected" }; detailKey = if ($hasCi) { "ciDetected" } else { "noCi" }; count = 0 })
-$health.Add([pscustomobject]@{ label = "Git worktree"; labelKey = "healthGit"; state = if (-not $gitRoot) { "warn" } elseif ($statusLines.Count -eq 0) { "good" } else { "warn" }; detail = if (-not $gitRoot) { "Not under Git" } elseif ($statusLines.Count -eq 0) { "Clean" } else { "$($statusLines.Count) changed item(s)" }; detailKey = if (-not $gitRoot) { "notUnderGit" } elseif ($statusLines.Count -eq 0) { "clean" } else { "changedItems" }; count = $statusLines.Count })
+$health.Add([pscustomobject]@{ label = "Git worktree"; labelKey = "healthGit"; state = if (-not $gitRoot -or -not $gitStatusAvailable -or $statusLines.Count -gt 0) { "warn" } else { "good" }; detail = if (-not $gitRoot) { "Not under Git" } elseif (-not $gitStatusAvailable) { "Git status unavailable" } elseif ($statusLines.Count -eq 0) { "Clean" } else { "$($statusLines.Count) changed item(s)" }; detailKey = if (-not $gitRoot) { "notUnderGit" } elseif (-not $gitStatusAvailable) { "gitStatusUnavailable" } elseif ($statusLines.Count -eq 0) { "clean" } else { "changedItems" }; count = $statusLines.Count })
 
 $risks = [System.Collections.Generic.List[object]]::new()
 if ($sensitiveFiles.Count -gt 0) {
@@ -332,6 +353,9 @@ if ($largeFiles.Count -gt 0) {
 if ($scan.Limited) {
     $risks.Add([pscustomobject]@{ level = "medium"; title = "Scan limit reached"; titleKey = "riskLimit"; detail = "Stopped after $MaxFiles files. Increase -MaxFiles for a complete report."; detailKey = "riskLimitDetail"; count = $MaxFiles; items = @() })
 }
+if ($scan.ScanErrorDirectoryCount -gt 0) {
+    $risks.Add([pscustomobject]@{ level = "high"; title = "Incomplete scan"; titleKey = "riskScanErrors"; detail = "Unreadable directories: $($scan.ScanErrorDirectoryCount). Results are incomplete."; detailKey = "riskScanErrorsDetail"; count = $scan.ScanErrorDirectoryCount; items = @($scan.ScanErrorDirectoryPaths) })
+}
 if (-not $hasTests -and $files.Count -gt 5) {
     $risks.Add([pscustomobject]@{ level = "medium"; title = "No tests detected"; titleKey = "riskNoTests"; detail = "Changes have no obvious automated safety net."; detailKey = "riskNoTestsDetail"; count = 0; items = @() })
 }
@@ -341,7 +365,9 @@ if ($todoTotal -gt 20) {
 
 $actions = [System.Collections.Generic.List[object]]::new()
 if (-not $gitRoot) { $actions.Add([pscustomobject]@{ priority = "P1"; title = "Put the project under version control"; titleKey = "actionGit"; detail = "Initialize Git before making meaningful changes."; detailKey = "actionGitDetail"; count = 0 }) }
+elseif (-not $gitStatusAvailable) { $actions.Add([pscustomobject]@{ priority = "P1"; title = "Repair Git status"; titleKey = "actionGitStatus"; detail = "Git could not read the worktree state. Check the repository before trusting change counts."; detailKey = "actionGitStatusDetail"; count = 0 }) }
 elseif ($statusLines.Count -gt 0) { $actions.Add([pscustomobject]@{ priority = "P1"; title = "Review the current worktree"; titleKey = "actionReview"; detail = "$($statusLines.Count) changed item(s) are waiting. Understand these before stacking on more work."; detailKey = "actionReviewDetail"; count = $statusLines.Count }) }
+if ($scan.ScanErrorDirectoryCount -gt 0) { $actions.Add([pscustomobject]@{ priority = "P1"; title = "Review unreadable directories"; titleKey = "actionScanErrors"; detail = "Unreadable directories: $($scan.ScanErrorDirectoryCount). Fix access or narrow the scan scope."; detailKey = "actionScanErrorsDetail"; count = $scan.ScanErrorDirectoryCount }) }
 if ($sensitiveFiles.Count -gt 0) { $actions.Add([pscustomobject]@{ priority = "P1"; title = "Verify sensitive files are ignored"; titleKey = "actionSensitive"; detail = "Check environment and key files without exposing their contents."; detailKey = "actionSensitiveDetail"; count = 0 }) }
 if (-not $readme) { $actions.Add([pscustomobject]@{ priority = "P2"; title = "Write the shortest useful README"; titleKey = "actionReadme"; detail = "Explain what this is, how to run it, and how to verify a change."; detailKey = "actionReadmeDetail"; count = 0 }) }
 if (-not $hasTests -and $files.Count -gt 5) { $actions.Add([pscustomobject]@{ priority = "P2"; title = "Add one high-value smoke test"; titleKey = "actionTest"; detail = "Cover the main path first; a giant test framework can wait."; detailKey = "actionTestDetail"; count = 0 }) }
@@ -365,14 +391,15 @@ $data = [ordered]@{
         name = $projectTitle
         path = $root
         branch = $branch
-        branchKey = if ($branch -eq "Not under Git") { "notUnderGit" } elseif ($branch -eq "Detached HEAD") { "detachedHead" } else { $null }
+        branchKey = if ($branch -eq "Not under Git") { "notUnderGit" } elseif ($branch -eq "Detached HEAD") { "detachedHead" } elseif ($branch -eq "Git branch unavailable") { "gitBranchUnavailable" } else { $null }
         git = [bool]$gitRoot
+        gitStatusAvailable = $gitStatusAvailable
     }
     metrics = [ordered]@{
         files = $files.Count
         directories = $scan.DirectoryCount
         sizeBytes = $totalBytes
-        changed = $statusLines.Count
+        changed = if ($gitRoot -and -not $gitStatusAvailable) { $null } else { $statusLines.Count }
         todos = $todoTotal
     }
     technologies = @($technologies)
@@ -394,6 +421,9 @@ $data = [ordered]@{
         skippedDirectories = @($scan.SkippedDirectories)
         skippedDirectoryCount = $scan.SkippedDirectoryCount
         reparsePointCount = $scan.ReparsePointCount
+        scanErrorDirectoryCount = $scan.ScanErrorDirectoryCount
+        scanErrorDirectoryPaths = @($scan.ScanErrorDirectoryPaths)
+        scanErrorsTruncated = $scan.ScanErrorsTruncated
     }
 }
 
