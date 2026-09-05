@@ -68,7 +68,8 @@ function Get-ScannableFiles {
     param(
         [System.IO.DirectoryInfo]$Root,
         [int]$Limit,
-        [string[]]$ExcludedDirectoryNames
+        [string[]]$ExcludedDirectoryNames,
+        [string]$ExcludedFilePath
     )
 
     $excluded = @{}
@@ -90,6 +91,7 @@ function Get-ScannableFiles {
 
         try {
             foreach ($file in $directory.GetFiles()) {
+                if ($ExcludedFilePath -and $file.FullName.Equals($ExcludedFilePath, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
                 if ($files.Count -ge $Limit) { $limited = $true; break }
                 $files.Add($file)
             }
@@ -161,7 +163,7 @@ if (-not (Test-Path -LiteralPath $templatePath)) {
     throw "Report template is missing: $templatePath"
 }
 
-$scan = Get-ScannableFiles -Root $rootItem -Limit $MaxFiles -ExcludedDirectoryNames $excludedDirectoryNames
+$scan = Get-ScannableFiles -Root $rootItem -Limit $MaxFiles -ExcludedDirectoryNames $excludedDirectoryNames -ExcludedFilePath $outputFullPath
 $files = @($scan.Files | Where-Object { $_.FullName -ne $outputFullPath })
 $relativeFiles = @{}
 foreach ($file in $files) {

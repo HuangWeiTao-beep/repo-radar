@@ -173,7 +173,7 @@ Run the smoke test from the repository root:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\smoke.ps1
 ```
 
-The test verifies report generation, Unicode Git output, UTC offset formatting, TODO detection, exclusion rules, and the self-scan false-positive regression.
+The test verifies report generation, Unicode Git output, UTC offset formatting, TODO detection, exclusion rules, output exclusion at the scan limit, and the self-scan false-positive regression.
 
 ## License
 

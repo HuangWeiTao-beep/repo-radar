@@ -173,7 +173,7 @@ git -C C:\你的项目路径 status
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\smoke.ps1
 ```
 
-测试会验证报告生成、Git 中文输出、UTC 偏移格式、TODO 检测、目录忽略规则，以及扫描测试脚本时不会产生假 TODO 的回归场景。
+测试会验证报告生成、Git 中文输出、UTC 偏移格式、TODO 检测、目录忽略规则、达到扫描上限时正确排除旧报告，以及扫描测试脚本时不会产生假 TODO 的回归场景。
 
 ## 许可证
 

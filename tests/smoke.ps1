@@ -28,7 +28,7 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "package.json"), '{"scripts":{"dev":"vite","test":"vitest","build":"vite build"}}')
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "src\main.ts"), "export const answer = 42; // ${todoKeyword}: explain the universe`n")
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "src\main.test.ts"), "// smoke test`n")
-    [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "src\yarn.lock"), "# A nested lockfile must not change the root package manager.`n")
+    [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "src\pnpm-lock.yaml"), "# A nested lockfile must not change the root package manager.`n")
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "node_modules\fixture-package\index.js"), "// ${todoKeyword}: excluded dependency marker`n")
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "dist\bundle.js"), "// ${todoKeyword}: excluded build marker`n")
 
@@ -68,6 +68,20 @@ try {
     $skippedNames = @($reportData.scan.skippedDirectories | ForEach-Object { $_.name })
     foreach ($expectedName in @('.git', 'dist', 'node_modules')) {
         if ($skippedNames -notcontains $expectedName) { throw "Skipped directory type was not reported: $expectedName" }
+    }
+
+    $limitScanRoot = Join-Path $temporaryRoot "limit-scan"
+    $limitScanReport = Join-Path $limitScanRoot "repo-radar-report.html"
+    New-Item -ItemType Directory -Path $limitScanRoot -Force | Out-Null
+    1..100 | ForEach-Object {
+        [System.IO.File]::WriteAllText((Join-Path $limitScanRoot ("file-{0:D3}.txt" -f $_)), "fixture")
+    }
+    [System.IO.File]::WriteAllText($limitScanReport, "stale report")
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $scanner -Path $limitScanRoot -Output $limitScanReport -MaxFiles 100 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Scanner could not perform the output exclusion regression check" }
+    $limitScanData = (Read-ReportData -ReportPath $limitScanReport).Data
+    if ($limitScanData.metrics.files -ne 100 -or $limitScanData.scan.limited) {
+        throw "The existing output report consumed a scan slot"
     }
 
     $selfScanRoot = Join-Path $temporaryRoot "self-scan"
