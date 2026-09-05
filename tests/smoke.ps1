@@ -28,6 +28,7 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "package.json"), '{"scripts":{"dev":"vite","test":"vitest","build":"vite build"}}')
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "src\main.ts"), "export const answer = 42; // ${todoKeyword}: explain the universe`n")
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "src\main.test.ts"), "// smoke test`n")
+    [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "src\yarn.lock"), "# A nested lockfile must not change the root package manager.`n")
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "node_modules\fixture-package\index.js"), "// ${todoKeyword}: excluded dependency marker`n")
     [System.IO.File]::WriteAllText((Join-Path $temporaryRoot "dist\bundle.js"), "// ${todoKeyword}: excluded build marker`n")
 
@@ -61,7 +62,7 @@ try {
 
     $reportedTodos = @($reportData.todos)
     if ($reportedTodos.Count -ne 1 -or $reportedTodos[0].file -ne 'src\main.ts') { throw "Excluded fixture markers leaked into the report" }
-    if ($reportData.metrics.files -ne 4) { throw "Excluded directory files were included in the file count" }
+    if ($reportData.metrics.files -ne 5) { throw "Excluded directory files were included in the file count" }
     if ($reportData.scan.skippedDirectoryCount -ne 3) { throw "Actual skipped directory count was not reported" }
     if (@($reportData.scan.excludedRules).Count -ne 18) { throw "The report does not use the complete exclusion rule list" }
     $skippedNames = @($reportData.scan.skippedDirectories | ForEach-Object { $_.name })

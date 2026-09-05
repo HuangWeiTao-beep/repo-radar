@@ -178,6 +178,11 @@ $markerMap = [ordered]@{
 $fileNameSet = @{}
 foreach ($file in $files) { $fileNameSet[$file.Name.ToLowerInvariant()] = $true }
 
+$rootFileNameSet = @{}
+foreach ($file in $files | Where-Object { $_.DirectoryName -eq $root }) {
+    $rootFileNameSet[$file.Name.ToLowerInvariant()] = $true
+}
+
 $technologies = [System.Collections.Generic.List[string]]::new()
 foreach ($marker in $markerMap.Keys) {
     if ($fileNameSet.ContainsKey($marker.ToLowerInvariant()) -and -not $technologies.Contains($markerMap[$marker])) {
@@ -287,7 +292,7 @@ if ($gitAvailable) {
 $commands = [System.Collections.Generic.List[object]]::new()
 $packageFile = $files | Where-Object { $_.Name -eq 'package.json' -and $_.DirectoryName -eq $root } | Select-Object -First 1
 if ($packageFile) {
-    $manager = if ($fileNameSet.ContainsKey('pnpm-lock.yaml')) { 'pnpm' } elseif ($fileNameSet.ContainsKey('yarn.lock')) { 'yarn' } elseif ($fileNameSet.ContainsKey('bun.lockb') -or $fileNameSet.ContainsKey('bun.lock')) { 'bun' } else { 'npm' }
+    $manager = if ($rootFileNameSet.ContainsKey('pnpm-lock.yaml')) { 'pnpm' } elseif ($rootFileNameSet.ContainsKey('yarn.lock')) { 'yarn' } elseif ($rootFileNameSet.ContainsKey('bun.lockb') -or $rootFileNameSet.ContainsKey('bun.lock')) { 'bun' } else { 'npm' }
     try {
         $package = Get-Content -Raw -LiteralPath $packageFile.FullName | ConvertFrom-Json
         $scriptNames = @($package.scripts.PSObject.Properties.Name)
